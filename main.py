@@ -1,16 +1,3 @@
-"""
-Telegram Image Hosting Bot + REST API
-=====================================
-
-* Telegram bot (long polling): send a photo / image document -> get direct URL + file_id.
-* REST API  POST /api/v1/upload-image  (X-API-Key protected) -> same, for external apps.
-* GET /img/{file_id}: optional proxy that serves the image WITHOUT exposing the bot token
-  and always resolves a fresh file path (Telegram file_paths are only guaranteed ~1 hour,
-  while a file_id stays valid).
-
-Run:  uvicorn main:app --host 0.0.0.0 --port 8000
-"""
-
 import logging
 import mimetypes
 import os
@@ -30,10 +17,10 @@ from telegram.helpers import escape_markdown
 # --------------------------------------------------------------------------- #
 # Configuration (environment variables)
 # --------------------------------------------------------------------------- #
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-ADMIN_CHAT_ID_RAW = os.getenv("ADMIN_CHAT_ID", "")           # chat/channel where files are stored
-API_KEYS = {k.strip() for k in os.getenv("API_KEYS", "").split(",") if k.strip()}
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")  # e.g. https://img.example.com
+BOT_TOKEN = os.getenv("8970344934:AAEOiFICNrumYwxvZD8tMDx6_tqe0xlewA0", "")
+ADMIN_CHAT_ID_RAW = os.getenv("8989172975", "")           # chat/channel where files are stored
+API_KEYS = {k.strip() for k in os.getenv("@MediaHost_Robot_rEyieSABli", "").split(",") if k.strip()}
+PUBLIC_BASE_URL = os.getenv("https://mediahost.onrender.com", "").rstrip("/")  # e.g. https://img.example.com
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "20"))        # Bot API getFile limit is 20 MB
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
@@ -290,4 +277,4 @@ async def serve_image(request: Request, file_id: str):
         content=bytes(content),
         media_type=media_type,
         headers={"Cache-Control": "public, max-age=86400"},
-)
+  )
