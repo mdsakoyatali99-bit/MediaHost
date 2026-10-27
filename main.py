@@ -8,28 +8,25 @@ from typing import Optional
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
-from telegram.constants import ChatMemberStatus, ParseMode
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, KeyboardButton, ReplyKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError, TimedOut
 from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.helpers import escape_markdown
 
 # --------------------------------------------------------------------------- #
-# Configuration & Dynamic State
+# Configuration & State
 # --------------------------------------------------------------------------- #
 BOT_TOKEN = "8970344934:AAEOiFICNrumYwxvZD8tMDx6_tqe0xlewA0"
-ADMIN_CHAT_ID = 8989172975  # এডমিন আইডি (ইন্টজার ফরম্যাট)
+ADMIN_CHAT_ID = 8989172975  # আপনার এডমিন আইডি
 
-# ডাইনামিক এপিআই কি ও ওয়েলকাম মেসেজ স্টোরেজ
 API_KEYS = {"titankey_secret_999"}
 DEFAULT_WELCOME = (
     "*📸 Titan Image API Bot*\n\n"
     "যেকোনো ছবি বা ইমেজ ফাইল পাঠান এবং সাথে সাথে ডিরেক্ট লিংক পান।"
 )
 CURRENT_WELCOME_MSG = DEFAULT_WELCOME
-
-# ফোর্স সাবস্ক্রিপশন চ্যানেল (যদি বাধ্যতামূলক করতে চান, যেমন: "@your_channel_username")
-REQUIRED_CHANNEL = ""  # খালি রাখলে চেক করবে না, চ্যানেল ইউজারনেম দিলে সেটি সাবস্ক্রাইব করা লাগবে
+REQUIRED_CHANNEL = ""  # চ্যানেল বাধ্যবাধকতা রাখতে চাইলে এখানে ইউজারনেম দিন (যেমন: "@yourchannel")
 
 PUBLIC_BASE_URL = "https://mediahost.onrender.com".rstrip("/")  
 MAX_UPLOAD_MB = 20        
@@ -59,86 +56,72 @@ def sniff_image(data: bytes) -> bool:
     )
 
 
-def esc(text: str) -> str:
-    return escape_markdown(text, version=2)
-
-
 # --------------------------------------------------------------------------- #
-# Helper: Force Subscription Check
-# --------------------------------------------------------------------------- #
-async def check_user_subscription(bot, user_id: int) -> bool:
-    if not REQUIRED_CHANNEL:
-        return True
-    try:
-        member = await bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
-        if member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-            return True
-    except Exception:
-        pass
-    return False
-
-
-# --------------------------------------------------------------------------- #
-# Telegram Bot Handlers & Admin Commands
+# Bot Handlers & Admin Keyboard
 # --------------------------------------------------------------------------- #
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    
-    # ফোর্স সাবস্ক্রিপশন চেক
-    if REQUIRED_CHANNEL and not await check_user_subscription(context.bot, user_id):
-        keyboard = [[InlineKeyboardButton("📢 চ্যানেলে জয়েন করুন", url=f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}")],
-                    [InlineKeyboardButton("🔄 চেক সাবস্ক্রিপশন", callback_data="check_sub")]]
-        await update.message.reply_text(
-            "⚠️ এই বট ব্যবহার করতে হলে আমাদের অফিসিয়াল চ্যানেলে অবশ্যই জয়েন করতে হবে!",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return
+    is_admin = (user_id == ADMIN_CHAT_ID)
+
+    # এডমিন হলে নিচের স্থায়ী কিবোর্ড বাটন দেখাবে
+    reply_markup = None
+    if is_admin:
+        keyboard = [
+            [KeyboardButton("🔑 Gen API Key"), KeyboardButton("📊 Bot Stats")],
+            [KeyboardButton("ℹ️ Help / Info")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
     api_base = PUBLIC_BASE_URL or "https://YOUR_SERVER"
-    curl = (
-        f"curl -X POST {api_base}/api/v1/upload-image \\\n"
-        '  -H "X-API-Key: titankey_secret_999" \\\n'
-        '  -F "file=@photo.jpg"'
-    )
-    text = CURRENT_WELCOME_MSG + "\n\n*API Integration*\n" + f"```\n{curl}\n```"
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
-
-
-# ১. এডমিন কমান্ড: নতুন এপিআই কি তৈরি করা (/genkey)
-async def gen_key_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != ADMIN_CHAT_ID:
-        await update.message.reply_text("⛔ এই কমান্ডটি শুধুমাত্র এডমিনের জন্য!")
-        return
+    text = CURRENT_WELCOME_MSG + f"\n\n🔗 সার্ভার লিংক: `{api_base}`"
     
-    new_key = f"titan_{secrets.token_hex(16)}"
-    API_KEYS.add(new_key)
-    await update.message.reply_text(f"✅ নতুন এপিআই কি সফলভাবে তৈরি করা হয়েছে:\n\n`{new_key}`", parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
 
-# ২. এডমিন কমান্ড: ওয়েলকাম মেসেজ পরিবর্তন করা (/setwelcome)
+# এডমিন কিবোর্ড বাটন হ্যান্ডলার
+async def handle_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if user_id != ADMIN_CHAT_ID:
+        return
+
+    text = update.message.text
+
+    if text == "🔑 Gen API Key":
+        new_key = f"titan_{secrets.token_hex(16)}"
+        API_KEYS.add(new_key)
+        await update.message.reply_text(f"✅ নতুন এপিআই কি তৈরি করা হয়েছে:\n\n`{new_key}`", parse_mode=ParseMode.MARKDOWN)
+
+    elif text == "📊 Bot Stats":
+        await update.message.reply_text(
+            f"📊 *বট স্ট্যাটাস*\n\n"
+            f"• মোট একটিভ এপিআই কি: `{len(API_KEYS)}`\n"
+            f"• সার্ভার লিংক: `{PUBLIC_BASE_URL}`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    elif text == "ℹ️ Help / Info":
+        await update.message.reply_text(
+            "🛠️ *এডমিন গাইড*\n\n"
+            "• ছবি পাঠালে সরাসরি লিংক পাবেন।\n"
+            "• কিবোর্ড থেকে '🔑 Gen API Key' এ ক্লিক করে নতুন কি বানাতে পারবেন।\n"
+            "• ওয়েলকাম মেসেজ বদলাতে `/setwelcome [আপনার মেসেজ]` লিখুন।",
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+
 async def set_welcome_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global CURRENT_WELCOME_MSG
     if update.effective_user.id != ADMIN_CHAT_ID:
-        await update.message.reply_text("⛔ এই কমান্ডটি শুধুমাত্র এডমিনের জন্য!")
         return
-    
     new_msg = " ".join(context.args)
     if not new_msg:
-        await update.message.reply_text("⚠️ দয়া করে নতুন মেসেজটি লিখে দিন। যেমন: `/setwelcome আপনার ওয়েলকাম টেক্সট`", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text("⚠️ ব্যবহার: `/setwelcome আপনার নতুন মেসেজ`", parse_mode=ParseMode.MARKDOWN)
         return
-    
     CURRENT_WELCOME_MSG = new_msg
-    await update.message.reply_text("✅ ওয়েলকাম মেসেজ সফলভাবে আপডেট করা হয়েছে!")
+    await update.message.reply_text("✅ ওয়েলকাম মেসেজ আপডেট করা হয়েছে!")
 
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    
-    # ফোর্স সাবস্ক্রিপশন চেক
-    if REQUIRED_CHANNEL and not await check_user_subscription(context.bot, user_id):
-        await update.message.reply_text(f"⚠️ ছবি আপলোড করতে হলে প্রথমে আমাদের চ্যানেলে জয়েন করুন: {REQUIRED_CHANNEL}")
-        return
-
     msg = update.message
     status_msg = None
     try:
@@ -150,32 +133,29 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await msg.reply_text("⚠️ অনুগ্রহ করে একটি সঠিক ছবি (JPEG, PNG, WebP) পাঠান।")
             return
 
-        # লোডিং এনিমেশন মেসেজ
-        status_msg = await msg.reply_text("⏳ *ছবি প্রসেস করা হচ্ছে...*", parse_mode=ParseMode.MARKDOWN_V2)
+        # লোডিং মেসেজ
+        status_msg = await msg.reply_text("⏳ ছবি প্রসেস করা হচ্ছে...")
 
-        # টেলিগ্রাম থেকে ফাইল ফেচ করা
+        # টেলিগ্রাম ফাইল ইনফো ফেচ করা
         file = await context.bot.get_file(tg_file_obj.file_id)
         direct_url = build_direct_url(file.file_path)
-        
-        # প্রক্সি লিংক তৈরি
         proxy_link = f"{PUBLIC_BASE_URL}/img/{tg_file_obj.file_id}" if PUBLIC_BASE_URL else direct_url
 
-        # পরিষ্কার লিংক পাঠানো
-        result_text = f"`{proxy_link}`"
-        await msg.reply_text(result_text, parse_mode=ParseMode.MARKDOWN_V2)
+        # লিংক পাঠানো
+        await msg.reply_text(f"`{proxy_link}`", parse_mode=ParseMode.MARKDOWN)
 
-        # প্রসেসিং মেসেজ অটো-ডিলিট
+        # প্রসেসিং মেসেজ রিমুভ
         if status_msg:
             await status_msg.delete()
 
-    except Exception:
+    except Exception as e:
+        logger.exception("Image processing error: %s", e)
         if status_msg:
             try:
                 await status_msg.delete()
-            except Exception:
+            except:
                 pass
-        logger.exception("Error in handle_image")
-        await msg.reply_text("❌ ছবি প্রসেস করার সময় একটি সমস্যা হয়েছে। আবার চেষ্টা করুন।")
+        await msg.reply_text("❌ ছবি প্রসেস করার সময় একটু সমস্যা হয়েছিল। দয়া করে আবার ছবিটি পাঠান।")
 
 
 async def bot_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -183,7 +163,7 @@ async def bot_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) 
 
 
 # --------------------------------------------------------------------------- #
-# FastAPI App + Lifespan
+# FastAPI Lifespan & App
 # --------------------------------------------------------------------------- #
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -196,8 +176,12 @@ async def lifespan(app: FastAPI):
         .build()
     )
     tg_app.add_handler(CommandHandler("start", start_cmd))
-    tg_app.add_handler(CommandHandler("genkey", gen_key_cmd))
     tg_app.add_handler(CommandHandler("setwelcome", set_welcome_cmd))
+    
+    # এডমিন কিবোর্ড বাটন টেক্সট হ্যান্ডলার
+    tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_buttons))
+    
+    # ইমেজ হ্যান্ডলার
     tg_app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
     tg_app.add_error_handler(bot_error_handler)
 
@@ -206,7 +190,7 @@ async def lifespan(app: FastAPI):
     await tg_app.updater.start_polling(drop_pending_updates=True)
     app.state.tg_app = tg_app
     app.state.admin_chat_id = ADMIN_CHAT_ID
-    logger.info("Master Bot polling started; API ready.")
+    logger.info("Fixed Master Bot started successfully.")
 
     try:
         yield
@@ -214,20 +198,16 @@ async def lifespan(app: FastAPI):
         await tg_app.updater.stop()
         await tg_app.stop()
         await tg_app.shutdown()
-        logger.info("Bot stopped.")
 
 
-app = FastAPI(title="Telegram Master Image Hosting API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Telegram Image Hosting API", version="2.1.0", lifespan=lifespan)
 
-# --------------------------------------------------------------------------- #
-# API Key Authentication & Routes
-# --------------------------------------------------------------------------- #
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 async def verify_api_key(key: Optional[str] = Depends(api_key_header)) -> str:
     if key and any(secrets.compare_digest(key, valid) for valid in API_KEYS):
         return key
-    raise HTTPException(status_code=403, detail="Unauthorized: invalid or missing API key")
+    raise HTTPException(status_code=403, detail="Unauthorized")
 
 @app.get("/health")
 async def health():
@@ -239,15 +219,11 @@ async def upload_image(request: Request, file: UploadFile = File(...), _: str = 
     chat_id = request.app.state.admin_chat_id
 
     if (file.content_type or "") not in ALLOWED_MIME:
-        raise HTTPException(status_code=415, detail=f"Unsupported content type: {file.content_type}")
+        raise HTTPException(status_code=415, detail="Unsupported content type")
 
     data = await file.read(MAX_UPLOAD_BYTES + 1)
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty file")
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=f"File too large")
-    if not sniff_image(data):
-        raise HTTPException(status_code=415, detail="Invalid image content")
+    if not data or len(data) > MAX_UPLOAD_BYTES or not sniff_image(data):
+        raise HTTPException(status_code=400, detail="Invalid image file")
 
     filename = os.path.basename(file.filename or "image") or "image"
     sent = await bot.send_document(chat_id=chat_id, document=InputFile(data, filename=filename), disable_notification=True)
