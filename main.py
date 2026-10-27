@@ -8,18 +8,29 @@ from typing import Optional
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
-from telegram import InputFile, Update
-from telegram.constants import ParseMode
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
+from telegram.constants import ChatMemberStatus, ParseMode
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError, TimedOut
 from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.helpers import escape_markdown
 
 # --------------------------------------------------------------------------- #
-# Configuration (আপনার কনফিগারেশন)
+# Configuration & Dynamic State
 # --------------------------------------------------------------------------- #
 BOT_TOKEN = "8970344934:AAEOiFICNrumYwxvZD8tMDx6_tqe0xlewA0"
-ADMIN_CHAT_ID_RAW = "8989172975"           
-API_KEYS = {"titankey_secret_999"}          
+ADMIN_CHAT_ID = 8989172975  # এডমিন আইডি (ইন্টজার ফরম্যাট)
+
+# ডাইনামিক এপিআই কি ও ওয়েলকাম মেসেজ স্টোরেজ
+API_KEYS = {"titankey_secret_999"}
+DEFAULT_WELCOME = (
+    "*📸 Titan Image API Bot*\n\n"
+    "যেকোনো ছবি বা ইমেজ ফাইল পাঠান এবং সাথে সাথে ডিরেক্ট লিংক পান।"
+)
+CURRENT_WELCOME_MSG = DEFAULT_WELCOME
+
+# ফোর্স সাবস্ক্রিপশন চ্যানেল (যদি বাধ্যতামূলক করতে চান, যেমন: "@your_channel_username")
+REQUIRED_CHANNEL = ""  # খালি রাখলে চেক করবে না, চ্যানেল ইউজারনেম দিলে সেটি সাবস্ক্রাইব করা লাগবে
+
 PUBLIC_BASE_URL = "https://mediahost.onrender.com".rstrip("/")  
 MAX_UPLOAD_MB = 20        
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -29,13 +40,6 @@ ALLOWED_MIME = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger("imagehost")
 logging.getLogger("httpx").setLevel(logging.WARNING)
-
-
-def _parse_chat_id(raw: str):
-    try:
-        return int(raw)
-    except ValueError:
-        return raw
 
 
 def build_direct_url(file_path: str) -> str:
@@ -60,25 +64,81 @@ def esc(text: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Telegram Bot Handlers (অ্যানিমেশন, প্রসেসিং ও অটো-ডিলিট লজিক সহ)
+# Helper: Force Subscription Check
+# --------------------------------------------------------------------------- #
+async def check_user_subscription(bot, user_id: int) -> bool:
+    if not REQUIRED_CHANNEL:
+        return True
+    try:
+        member = await bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
+        if member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+# --------------------------------------------------------------------------- #
+# Telegram Bot Handlers & Admin Commands
 # --------------------------------------------------------------------------- #
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    
+    # ফোর্স সাবস্ক্রিপশন চেক
+    if REQUIRED_CHANNEL and not await check_user_subscription(context.bot, user_id):
+        keyboard = [[InlineKeyboardButton("📢 চ্যানেলে জয়েন করুন", url=f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}")],
+                    [InlineKeyboardButton("🔄 চেক সাবস্ক্রিপশন", callback_data="check_sub")]]
+        await update.message.reply_text(
+            "⚠️ এই বট ব্যবহার করতে হলে আমাদের অফিসিয়াল চ্যানেলে অবশ্যই জয়েন করতে হবে!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
     api_base = PUBLIC_BASE_URL or "https://YOUR_SERVER"
     curl = (
         f"curl -X POST {api_base}/api/v1/upload-image \\\n"
         '  -H "X-API-Key: titankey_secret_999" \\\n'
         '  -F "file=@photo.jpg"'
     )
-    text = (
-        "*📸 Titan Image API Bot*\n\n"
-        + esc("Send me any photo or image file, and I'll instantly generate a direct link for you.")
-        + "\n\n*API integration*\n"
-        + f"```\n{curl}\n```"
-    )
+    text = CURRENT_WELCOME_MSG + "\n\n*API Integration*\n" + f"```\n{curl}\n```"
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
 
+# ১. এডমিন কমান্ড: নতুন এপিআই কি তৈরি করা (/genkey)
+async def gen_key_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        await update.message.reply_text("⛔ এই কমান্ডটি শুধুমাত্র এডমিনের জন্য!")
+        return
+    
+    new_key = f"titan_{secrets.token_hex(16)}"
+    API_KEYS.add(new_key)
+    await update.message.reply_text(f"✅ নতুন এপিআই কি সফলভাবে তৈরি করা হয়েছে:\n\n`{new_key}`", parse_mode=ParseMode.MARKDOWN_V2)
+
+
+# ২. এডমিন কমান্ড: ওয়েলকাম মেসেজ পরিবর্তন করা (/setwelcome)
+async def set_welcome_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global CURRENT_WELCOME_MSG
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        await update.message.reply_text("⛔ এই কমান্ডটি শুধুমাত্র এডমিনের জন্য!")
+        return
+    
+    new_msg = " ".join(context.args)
+    if not new_msg:
+        await update.message.reply_text("⚠️ দয়া করে নতুন মেসেজটি লিখে দিন। যেমন: `/setwelcome আপনার ওয়েলকাম টেক্সট`", parse_mode=ParseMode.MARKDOWN_V2)
+        return
+    
+    CURRENT_WELCOME_MSG = new_msg
+    await update.message.reply_text("✅ ওয়েলকাম মেসেজ সফলভাবে আপডেট করা হয়েছে!")
+
+
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    
+    # ফোর্স সাবস্ক্রিপশন চেক
+    if REQUIRED_CHANNEL and not await check_user_subscription(context.bot, user_id):
+        await update.message.reply_text(f"⚠️ ছবি আপলোড করতে হলে প্রথমে আমাদের চ্যানেলে জয়েন করুন: {REQUIRED_CHANNEL}")
+        return
+
     msg = update.message
     status_msg = None
     try:
@@ -90,38 +150,32 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await msg.reply_text("⚠️ অনুগ্রহ করে একটি সঠিক ছবি (JPEG, PNG, WebP) পাঠান।")
             return
 
-        # ১. ছবি আসার সাথে সাথে প্রসেসিং বা লোডিং মেসেজ দেখানো
+        # লোডিং এনিমেশন মেসেজ
         status_msg = await msg.reply_text("⏳ *ছবি প্রসেস করা হচ্ছে...*", parse_mode=ParseMode.MARKDOWN_V2)
 
-        # ২. টেলিগ্রাম থেকে ফাইল ফেচ করা
+        # টেলিগ্রাম থেকে ফাইল ফেচ করা
         file = await context.bot.get_file(tg_file_obj.file_id)
         direct_url = build_direct_url(file.file_path)
         
-        # প্রক্সি লিংক তৈরি (ব্রাউজারে সরাসরি ভিউ করার জন্য)
+        # প্রক্সি লিংক তৈরি
         proxy_link = f"{PUBLIC_BASE_URL}/img/{tg_file_obj.file_id}" if PUBLIC_BASE_URL else direct_url
 
-        # ৩. শুধুমাত্র পরিষ্কার লিংকটি ইউজারকে পাঠানো
+        # পরিষ্কার লিংক পাঠানো
         result_text = f"`{proxy_link}`"
         await msg.reply_text(result_text, parse_mode=ParseMode.MARKDOWN_V2)
 
-        # ৪. অপ্রয়োজনীয় প্রসেসিং মেসেজটি অটোমেটিক ডিলিট করে দেওয়া
+        # প্রসেসিং মেসেজ অটো-ডিলিট
         if status_msg:
             await status_msg.delete()
 
-    except RetryAfter as e:
-        if status_msg:
-            await status_msg.delete()
-        await msg.reply_text(f"⏳ একটু পরে আবার চেষ্টা করুন ({int(e.retry_after)}s)।")
-    except BadRequest as e:
-        if status_msg:
-            await status_msg.delete()
-        logger.warning("BadRequest: %s", e)
-        await msg.reply_text("❌ টেলিগ্রাম ফাইলটি গ্রহণ করতে পারেনি।")
     except Exception:
         if status_msg:
-            await status_msg.delete()
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
         logger.exception("Error in handle_image")
-        await msg.reply_text("❌ একটি অনাকাঙ্ক্ষিত ত্রুটি ঘটেছে।")
+        await msg.reply_text("❌ ছবি প্রসেস করার সময় একটি সমস্যা হয়েছে। আবার চেষ্টা করুন।")
 
 
 async def bot_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -142,6 +196,8 @@ async def lifespan(app: FastAPI):
         .build()
     )
     tg_app.add_handler(CommandHandler("start", start_cmd))
+    tg_app.add_handler(CommandHandler("genkey", gen_key_cmd))
+    tg_app.add_handler(CommandHandler("setwelcome", set_welcome_cmd))
     tg_app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
     tg_app.add_error_handler(bot_error_handler)
 
@@ -149,8 +205,8 @@ async def lifespan(app: FastAPI):
     await tg_app.start()
     await tg_app.updater.start_polling(drop_pending_updates=True)
     app.state.tg_app = tg_app
-    app.state.admin_chat_id = _parse_chat_id(ADMIN_CHAT_ID_RAW)
-    logger.info("Bot polling started; API ready.")
+    app.state.admin_chat_id = ADMIN_CHAT_ID
+    logger.info("Master Bot polling started; API ready.")
 
     try:
         yield
@@ -161,7 +217,7 @@ async def lifespan(app: FastAPI):
         logger.info("Bot stopped.")
 
 
-app = FastAPI(title="Telegram Image Hosting API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Telegram Master Image Hosting API", version="2.0.0", lifespan=lifespan)
 
 # --------------------------------------------------------------------------- #
 # API Key Authentication & Routes
