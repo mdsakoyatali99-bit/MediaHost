@@ -15,24 +15,23 @@ from telegram.ext import Application, ApplicationBuilder, CommandHandler, Contex
 from telegram.helpers import escape_markdown
 
 # --------------------------------------------------------------------------- #
-# Configuration (environment variables)
+# Configuration (আপনার তথ্যগুলো এখানে সরাসরি সেট করা আছে)
 # --------------------------------------------------------------------------- #
-BOT_TOKEN = os.getenv("8970344934:AAEOiFICNrumYwxvZD8tMDx6_tqe0xlewA0", "")
-ADMIN_CHAT_ID_RAW = os.getenv("8989172975", "")           # chat/channel where files are stored
-API_KEYS = {k.strip() for k in os.getenv("@MediaHost_Robot_rEyieSABli", "").split(",") if k.strip()}
-PUBLIC_BASE_URL = os.getenv("https://mediahost.onrender.com", "").rstrip("/")  # e.g. https://img.example.com
-MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "20"))        # Bot API getFile limit is 20 MB
+BOT_TOKEN = "8970344934:AAEOiFICNrumYwxvZD8tMDx6_tqe0xlewA0"
+ADMIN_CHAT_ID_RAW = "8989172975"           # আপনার টেলিগ্রাম চ্যাট আইডি
+API_KEYS = {"titankey_secret_999"}          # এপিআই কি (অন্যান্য অ্যাপ থেকে আপলোড করার সময় এটি কাজে লাগবে)
+PUBLIC_BASE_URL = "https://mediahost.onrender.com".rstrip("/")  # আপনার রেন্ডার লাইভ লিংক
+MAX_UPLOAD_MB = 20        # Bot API getFile limit is 20 MB
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 ALLOWED_MIME = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp", "image/tiff"}
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger("imagehost")
-logging.getLogger("httpx").setLevel(logging.WARNING)  # httpx logs URLs containing the bot token
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def _parse_chat_id(raw: str):
-    """Chat IDs are ints (negative for groups/channels); allow @username as fallback."""
     try:
         return int(raw)
     except ValueError:
@@ -43,26 +42,23 @@ def _parse_chat_id(raw: str):
 # Helpers
 # --------------------------------------------------------------------------- #
 def build_direct_url(file_path: str) -> str:
-    """Build the Telegram direct file URL. PTB may already return a full URL."""
     if file_path.startswith("http"):
         return file_path
     return f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
 
 
 def sniff_image(data: bytes) -> bool:
-    """Check magic bytes so non-images can't be smuggled in with a fake content-type."""
     return (
-        data.startswith(b"\xff\xd8\xff")                                   # JPEG
-        or data.startswith(b"\x89PNG\r\n\x1a\n")                            # PNG
-        or data[:6] in (b"GIF87a", b"GIF89a")                               # GIF
-        or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")                  # WebP
-        or data.startswith(b"BM")                                           # BMP
-        or data[:4] in (b"II*\x00", b"MM\x00*")                             # TIFF
+        data.startswith(b"\xff\xd8\xff")
+        or data.startswith(b"\x89PNG\r\n\x1a\n")
+        or data[:6] in (b"GIF87a", b"GIF89a")
+        or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")
+        or data.startswith(b"BM")
+        or data[:4] in (b"II*\x00", b"MM\x00*")
     )
 
 
 def esc(text: str) -> str:
-    """Escape text for Telegram MarkdownV2."""
     return escape_markdown(text, version=2)
 
 
@@ -73,7 +69,7 @@ def welcome_text() -> str:
     api_base = PUBLIC_BASE_URL or "https://YOUR_SERVER"
     curl = (
         f"curl -X POST {api_base}/api/v1/upload-image \\\n"
-        '  -H "X-API-Key: YOUR_API_KEY" \\\n'
+        '  -H "X-API-Key: titankey_secret_999" \\\n'
         '  -F "file=@photo.jpg"'
     )
     return (
@@ -95,11 +91,10 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle photos and image documents sent to the bot."""
     msg = update.message
     try:
         if msg.photo:
-            tg_file_obj = msg.photo[-1]            # largest available size
+            tg_file_obj = msg.photo[-1]
         elif msg.document and (msg.document.mime_type or "") in ALLOWED_MIME:
             tg_file_obj = msg.document
         else:
@@ -119,12 +114,11 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except RetryAfter as e:
         await msg.reply_text(f"⏳ Rate limited by Telegram. Retry in {int(e.retry_after)}s.")
     except BadRequest as e:
-        # Typically "File is too big" (>20 MB) for getFile
         logger.warning("BadRequest: %s", e)
         await msg.reply_text("❌ Telegram rejected this file (it may be larger than 20 MB).")
     except (TimedOut, NetworkError):
         await msg.reply_text("🌐 Network problem talking to Telegram. Please try again.")
-    except Exception:  # never let a handler crash the bot
+    except Exception:
         logger.exception("Unexpected error in handle_image")
         await msg.reply_text("❌ Unexpected error. Please try again later.")
 
@@ -134,14 +128,10 @@ async def bot_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) 
 
 
 # --------------------------------------------------------------------------- #
-# FastAPI app + lifespan (starts / stops the bot alongside the web server)
+# FastAPI app + lifespan
 # --------------------------------------------------------------------------- #
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    missing = [n for n, v in (("BOT_TOKEN", BOT_TOKEN), ("ADMIN_CHAT_ID", ADMIN_CHAT_ID_RAW), ("API_KEYS", API_KEYS)) if not v]
-    if missing:
-        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
-
     tg_app: Application = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
@@ -179,7 +169,6 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 async def verify_api_key(key: Optional[str] = Depends(api_key_header)) -> str:
-    """Reject missing/invalid keys with 403. Constant-time comparison avoids timing leaks."""
     if key and any(secrets.compare_digest(key, valid) for valid in API_KEYS):
         return key
     raise HTTPException(status_code=403, detail="Unauthorized: invalid or missing API key")
@@ -195,15 +184,13 @@ async def health():
 
 @app.post("/api/v1/upload-image")
 async def upload_image(request: Request, file: UploadFile = File(...), _: str = Depends(verify_api_key)):
-    """Accept an image (multipart/form-data), store it in Telegram, return its permanent link."""
     bot = request.app.state.tg_app.bot
     chat_id = request.app.state.admin_chat_id
 
-    # --- Validate input ---------------------------------------------------- #
     if (file.content_type or "") not in ALLOWED_MIME:
         raise HTTPException(status_code=415, detail=f"Unsupported content type: {file.content_type}")
 
-    data = await file.read(MAX_UPLOAD_BYTES + 1)   # read at most limit+1 to detect oversize
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
     if len(data) > MAX_UPLOAD_BYTES:
@@ -213,7 +200,6 @@ async def upload_image(request: Request, file: UploadFile = File(...), _: str = 
 
     filename = os.path.basename(file.filename or "image") or "image"
 
-    # --- Upload to Telegram (as document to keep original quality) --------- #
     try:
         sent = await bot.send_document(
             chat_id=chat_id,
@@ -250,14 +236,13 @@ async def upload_image(request: Request, file: UploadFile = File(...), _: str = 
         "direct_link": direct_link,
         "file_id": file_id,
     }
-    if PUBLIC_BASE_URL:  # token-free, always-fresh alternative link
+    if PUBLIC_BASE_URL:
         response["proxy_link"] = f"{PUBLIC_BASE_URL}/img/{file_id}"
     return JSONResponse(response)
 
 
 @app.get("/img/{file_id}")
 async def serve_image(request: Request, file_id: str):
-    """Token-safe image proxy: resolves a fresh path from file_id and streams the bytes."""
     bot = request.app.state.tg_app.bot
     try:
         tg_file = await bot.get_file(file_id)
@@ -277,4 +262,4 @@ async def serve_image(request: Request, file_id: str):
         content=bytes(content),
         media_type=media_type,
         headers={"Cache-Control": "public, max-age=86400"},
-  )
+)
