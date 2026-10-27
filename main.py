@@ -2,7 +2,6 @@ import logging
 import mimetypes
 import os
 import secrets
-import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -61,7 +60,7 @@ def esc(text: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Telegram bot handlers (অটো-ডিলিট ও লোডিং অ্যানিমেশন সহ)
+# Telegram Bot Handlers (অ্যানিমেশন, প্রসেসিং ও অটো-ডিলিট লজিক সহ)
 # --------------------------------------------------------------------------- #
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     api_base = PUBLIC_BASE_URL or "https://YOUR_SERVER"
@@ -91,39 +90,38 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await msg.reply_text("⚠️ অনুগ্রহ করে একটি সঠিক ছবি (JPEG, PNG, WebP) পাঠান।")
             return
 
-        # ১. ছবি রিসিভ করার পর লোডিং বা প্রসেসিং মেসেজ দেখানো (অ্যানিমেশন ইফেক্ট)
-        status_msg = await msg.reply_text("⏳ *ছবি আপলোড হচ্ছে, দয়া করে অপেক্ষা করুন...*", parse_mode=ParseMode.MARKDOWN_V2)
+        # ১. ছবি আসার সাথে সাথে প্রসেসিং বা লোডিং মেসেজ দেখানো
+        status_msg = await msg.reply_text("⏳ *ছবি প্রসেস করা হচ্ছে...*", parse_mode=ParseMode.MARKDOWN_V2)
 
-        # টেলিগ্রাম থেকে ফাইল প্রসেস করা
+        # ২. টেলিগ্রাম থেকে ফাইল ফেচ করা
         file = await context.bot.get_file(tg_file_obj.file_id)
         direct_url = build_direct_url(file.file_path)
         
-        # প্রক্সি লিংক তৈরি (ব্রাউজারে ডিরেক্ট ইমেজ ভিউ করার জন্য)
+        # প্রক্সি লিংক তৈরি (ব্রাউজারে সরাসরি ভিউ করার জন্য)
         proxy_link = f"{PUBLIC_BASE_URL}/img/{tg_file_obj.file_id}" if PUBLIC_BASE_URL else direct_url
 
-        # ২. ইউজারকে শুধুমাত্র পরিষ্কার লিংকটি পাঠানো
-        result_text = (
-            f"`{proxy_link}`"
-        )
+        # ৩. শুধুমাত্র পরিষ্কার লিংকটি ইউজারকে পাঠানো
+        result_text = f"`{proxy_link}`"
         await msg.reply_text(result_text, parse_mode=ParseMode.MARKDOWN_V2)
 
-        # ৩. প্রসেসিং বা স্ট্যাটাস মেসেজটি অটোমেটিক ডিলিট করে দেওয়া যাতে চ্যাট পরিষ্কার থাকে
+        # ৪. অপ্রয়োজনীয় প্রসেসিং মেসেজটি অটোমেটিক ডিলিট করে দেওয়া
         if status_msg:
             await status_msg.delete()
 
     except RetryAfter as e:
         if status_msg:
             await status_msg.delete()
-        await msg.reply_text(f"⏳ টেলিগ্রাম রেট লিমি트। {int(e.retry_after)} সেকেন্ড পরে চেষ্টা করুন।")
-    except BadRequest:
+        await msg.reply_text(f"⏳ একটু পরে আবার চেষ্টা করুন ({int(e.retry_after)}s)।")
+    except BadRequest as e:
         if status_msg:
             await status_msg.delete()
-        await msg.reply_text("❌ ফাইলটি অনেক বড় (২০ মোবাইটের বেশি হতে পারে)।")
+        logger.warning("BadRequest: %s", e)
+        await msg.reply_text("❌ টেলিগ্রাম ফাইলটি গ্রহণ করতে পারেনি।")
     except Exception:
         if status_msg:
             await status_msg.delete()
         logger.exception("Error in handle_image")
-        await msg.reply_text("❌ একটি অনাকাঙ্ক্ষিত ত্রুটি ঘটেছে। আবার চেষ্টা করুন।")
+        await msg.reply_text("❌ একটি অনাকাঙ্ক্ষিত ত্রুটি ঘটেছে।")
 
 
 async def bot_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -131,7 +129,7 @@ async def bot_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) 
 
 
 # --------------------------------------------------------------------------- #
-# FastAPI app + lifespan
+# FastAPI App + Lifespan
 # --------------------------------------------------------------------------- #
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -166,7 +164,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Telegram Image Hosting API", version="1.0.0", lifespan=lifespan)
 
 # --------------------------------------------------------------------------- #
-# API key authentication & Routes (পূর্বের মতোই বহাল আছে)
+# API Key Authentication & Routes
 # --------------------------------------------------------------------------- #
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
