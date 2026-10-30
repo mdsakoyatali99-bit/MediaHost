@@ -17,7 +17,7 @@ from telegram.helpers import escape_markdown
 # --------------------------------------------------------------------------- #
 # Configuration & State
 # --------------------------------------------------------------------------- #
-BOT_TOKEN = "8970344934:AAEOiFICNrumYwxvZD8tMDx6_tqe0xlewA0"
+BOT_TOKEN = "8970344934:AAEplv08tmYd7aOa9hW6MQqMjgLkoUbeZd0"
 ADMIN_CHAT_ID = 8989172975  # আপনার এডমিন আইডি
 
 API_KEYS = {"titankey_secret_999"}
